@@ -1,22 +1,27 @@
 import pandas as pd
-import numpy as np
 from flask import Flask, request, render_template
 import pickle
+import os
 
-# Load the model
-with open('model.pkl', 'rb') as model_file:
+MODEL_PATH = 'model.pkl'
+COLUMNS_PATH = 'model_columns.pkl'
+SCALER_PATH = 'scaler.pkl'
+
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"Model file '{MODEL_PATH}' not found.")
+if not os.path.exists(COLUMNS_PATH):
+    raise FileNotFoundError(f"Columns file '{COLUMNS_PATH}' not found.")
+if not os.path.exists(SCALER_PATH):
+    raise FileNotFoundError(f"Scaler file '{SCALER_PATH}' not found.")
+
+with open(MODEL_PATH, 'rb') as model_file:
     model = pickle.load(model_file)
+with open(COLUMNS_PATH, 'rb') as columns_file:
+    required_columns = pickle.load(columns_file)
+with open(SCALER_PATH, 'rb') as scaler_file:
+    scaler = pickle.load(scaler_file)
 
 app = Flask(__name__)
-
-# Columns used during training
-required_columns = [
-    'area', 'bedrooms', 'bathrooms', 'stories', 'mainroad_yes', 'mainroad_no', 
-    'guestroom_yes', 'guestroom_no', 'basement_yes', 'basement_no',
-    'hotwaterheating_yes', 'hotwaterheating_no', 'airconditioning_yes', 
-    'airconditioning_no', 'parking', 'prefarea_yes', 'prefarea_no', 
-    'furnishingstatus_furnished', 'furnishingstatus_semi-furnished', 'furnishingstatus_unfurnished'
-]
 
 @app.route('/')
 def index():
@@ -24,45 +29,46 @@ def index():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    data = request.form
-    
-    # Create DataFrame with input values
-    features = pd.DataFrame({
-        'area': [float(data['area'])],
-        'bedrooms': [int(data['bedrooms'])],
-        'bathrooms': [int(data['bathrooms'])],
-        'stories': [int(data['stories'])],
-        'mainroad_yes': [1 if data['mainroad'] == 'yes' else 0],
-        'mainroad_no': [1 if data['mainroad'] == 'no' else 0],
-        'guestroom_yes': [1 if data['guestroom'] == 'yes' else 0],
-        'guestroom_no': [1 if data['guestroom'] == 'no' else 0],
-        'basement_yes': [1 if data['basement'] == 'yes' else 0],
-        'basement_no': [1 if data['basement'] == 'no' else 0],
-        'hotwaterheating_yes': [1 if data['hotwaterheating'] == 'yes' else 0],
-        'hotwaterheating_no': [1 if data['hotwaterheating'] == 'no' else 0],
-        'airconditioning_yes': [1 if data['airconditioning'] == 'yes' else 0],
-        'airconditioning_no': [1 if data['airconditioning'] == 'no' else 0],
-        'parking': [int(data['parking'])],
-        'prefarea_yes': [1 if data['prefarea'] == 'yes' else 0],
-        'prefarea_no': [1 if data['prefarea'] == 'no' else 0],
-        'furnishingstatus_furnished': [1 if data['furnishingstatus'] == 'furnished' else 0],
-        'furnishingstatus_semi-furnished': [1 if data['furnishingstatus'] == 'semi-furnished' else 0],
-        'furnishingstatus_unfurnished': [1 if data['furnishingstatus'] == 'unfurnished' else 0]
-    })
+    try:
+        data = request.form
 
-    # Ensure the input has all the columns required (even if they are 0)
-    for col in required_columns:
-        if col not in features.columns:
-            features[col] = 0
+        # Create a DataFrame from form data
+        input_dict = {
+            'area': float(data.get('area', 0)),
+            'bedrooms': int(data.get('bedrooms', 0)),
+            'bathrooms': int(data.get('bathrooms', 0)),
+            'stories': int(data.get('stories', 0)),
+            'parking': int(data.get('parking', 0)),
+            'mainroad': data.get('mainroad', 'no'),
+            'guestroom': data.get('guestroom', 'no'),
+            'basement': data.get('basement', 'no'),
+            'hotwaterheating': data.get('hotwaterheating', 'no'),
+            'airconditioning': data.get('airconditioning', 'no'),
+            'prefarea': data.get('prefarea', 'no'),
+            'furnishingstatus': data.get('furnishingstatus', 'unfurnished')
+        }
+        df = pd.DataFrame([input_dict])
 
-    # Reorder the columns to match the training set
-    features = features[required_columns]
+        # One-hot encode to match training
+        df = pd.get_dummies(df)
 
-    # Make prediction
-    prediction = model.predict(features)
+        # Add any missing columns
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = 0
 
-    # Return the prediction result
-    return render_template('index.html', predicted_price=prediction[0])
+        # Ensure column order matches training
+        df = df[required_columns]
+
+        # Scale features
+        df_scaled = scaler.transform(df)
+
+        prediction = model.predict(df_scaled)
+
+        return render_template('index.html', predicted_price=round(prediction[0], 2))
+
+    except Exception as e:
+        return render_template('index.html', predicted_price=f"Error: {str(e)}")
 
 if __name__ == '__main__':
     app.run(debug=True)
